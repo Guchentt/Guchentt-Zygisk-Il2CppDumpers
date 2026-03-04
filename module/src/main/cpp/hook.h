@@ -17,7 +17,7 @@ struct HookInfo {
     const char* namespace_name;
     const char* method_name;
     uint64_t offset;  // RVA offset
-    uint64_t va;      // Virtual address
+    uint64_t va;      // Runtime virtual address
     void* original_func;
     void* hook_func;
     bool hooked;

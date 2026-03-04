@@ -23,7 +23,7 @@
 
 #undef DO_API
 
-static uint64_t il2cpp_base = 0;
+uint64_t il2cpp_base = 0;
 
 void init_il2cpp_api(void *handle) {
 #define DO_API(r, n, p) {                      \

@@ -10,6 +10,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <climits>
+#include <cerrno>
 
 extern uint64_t il2cpp_base; // From il2cpp_dump.cpp
 
@@ -30,13 +31,19 @@ static bool install_inline_hook(void* target, void* hook_func, void** original_f
         return false;
     }
 
+    // Verify address is valid (in readable memory)
+    // Try to read first byte to check if address is valid
+    volatile uint8_t test_read = *((volatile uint8_t*)target);
+    (void)test_read; // Suppress unused warning
+    
     // Calculate page size
     size_t page_size = sysconf(_SC_PAGESIZE);
     void* page_start = (void*)((uintptr_t)target & ~(page_size - 1));
     
     // Make memory writable
-    if (mprotect(page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
-        LOGE("Failed to make memory writable: %p", target);
+    int ret = mprotect(page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC);
+    if (ret != 0) {
+        LOGE("Failed to make memory writable: %p (errno: %d)", target, errno);
         return false;
     }
 
