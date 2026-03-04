@@ -19,6 +19,7 @@
 #include <cstdarg>
 #include <cinttypes>
 #include <cstdlib>
+#include <unistd.h>
 
 // Hook info storage
 static HookInfo mail_hooks[32];
@@ -30,6 +31,9 @@ extern uint64_t il2cpp_base; // From il2cpp_dump.cpp
 #define DO_API(r, n, p) extern r (*n) p
 #include "il2cpp-api-functions.h"
 #undef DO_API
+
+// Forward declarations
+static bool hook_methods_using_il2cpp_api(void* il2cpp_handle);
 
 // Hooked function stubs
 extern "C" {
@@ -52,14 +56,25 @@ extern "C" {
                     il2cpp_class_from_name(il2cpp_get_corlib(), "System", "String"),
                     handler_class)) {
                 Il2CppString* handler_str = (Il2CppString*)handler;
-                const char* handler_cstr = il2cpp_string_chars(handler_str);
+                const Il2CppChar* handler_wstr = il2cpp_string_chars(handler_str);
                 int handler_len = il2cpp_string_length(handler_str);
-                LOGI("Handler: %.*s", handler_len, handler_cstr);
                 
-                // Check if this is a mail-related request
-                if (strstr(handler_cstr, "Mail") != nullptr || 
-                    strstr(handler_cstr, "mail") != nullptr) {
-                    LOGI(">>> Mail-related network request detected!");
+                // Convert Il2CppChar (UTF-16) to char (UTF-8) for logging
+                // Note: This is a simplified conversion, may not handle all UTF-16 characters correctly
+                if (handler_len > 0 && handler_len < 256) {
+                    char handler_cstr[256] = {0};
+                    for (int i = 0; i < handler_len && i < 255; i++) {
+                        handler_cstr[i] = (char)(handler_wstr[i] & 0xFF);
+                    }
+                    LOGI("Handler: %s", handler_cstr);
+                    
+                    // Check if this is a mail-related request
+                    if (strstr(handler_cstr, "Mail") != nullptr || 
+                        strstr(handler_cstr, "mail") != nullptr) {
+                        LOGI(">>> Mail-related network request detected!");
+                    }
+                } else {
+                    LOGI("Handler: [Il2CppString, len=%d]", handler_len);
                 }
             } else {
                 LOGI("Handler: %p (not a string)", handler);
@@ -105,7 +120,7 @@ extern "C" {
         
         // Extract object information using IL2CPP API
         if (self) {
-            Il2CppClass* klass = il2cpp_object_get_class(self);
+            Il2CppClass* klass = il2cpp_object_get_class((Il2CppObject*)self);
             if (klass) {
                 const char* class_name = il2cpp_class_get_name(klass);
                 const char* namespace_name = il2cpp_class_get_namespace(klass);
@@ -709,7 +724,7 @@ void on_mail_received(void* mail_obj) {
     
     // Extract mail information using IL2CPP API
     if (mail_obj) {
-        Il2CppClass* klass = il2cpp_object_get_class(mail_obj);
+        Il2CppClass* klass = il2cpp_object_get_class((Il2CppObject*)mail_obj);
         if (klass) {
             const char* class_name = il2cpp_class_get_name(klass);
             const char* namespace_name = il2cpp_class_get_namespace(klass);
