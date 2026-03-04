@@ -28,6 +28,53 @@ extern "C" {
     // Note: Actual signatures depend on the game's IL2CPP methods
     // These are generic stubs that log the hook and call callbacks
     
+    // Network communication hook - intercept all network requests/responses
+    void* network_send_hook(void* self, void* handler, void* content, ...) {
+        LOGI("=== Network Send Hook ===");
+        LOGI("Self: %p", self);
+        
+        // Check if this is a mail-related request
+        if (handler) {
+            // handler is usually a string (RPC name)
+            // We need to check if it contains "Mail" or mail-related keywords
+            // Note: This is a simplified check - actual implementation may need to use IL2CPP API
+            LOGI("Handler: %p", handler);
+        }
+        
+        if (content) {
+            LOGI("Content: %p (size: ?)", content);
+            // TODO: Parse content to check if it's mail-related
+        }
+        
+        // Call original function (would need to restore and call)
+        // For now, return nullptr
+        return nullptr;
+    }
+    
+    void* network_call_hook(void* self, void* handler, void* content, void* reply, ...) {
+        LOGI("=== Network Call Hook ===");
+        LOGI("Self: %p", self);
+        LOGI("Handler: %p", handler);
+        LOGI("Content: %p", content);
+        LOGI("Reply callback: %p", reply);
+        
+        // TODO: Check if handler contains mail-related keywords
+        // TODO: Hook reply callback to intercept mail responses
+        
+        return nullptr;
+    }
+    
+    void* network_process_message_hook(void* self, void* msg, ...) {
+        LOGI("=== Network ProcessMessage Hook ===");
+        LOGI("Self: %p", self);
+        LOGI("Message: %p", msg);
+        
+        // TODO: Parse message to check if it's mail-related response
+        // TODO: Extract mail data from response
+        
+        return nullptr;
+    }
+    
     void* mail_get_reward_hook(void* self, ...) {
         LOGI("=== Mail GetReward Hook ===");
         LOGI("Self: %p", self);
@@ -117,7 +164,7 @@ static bool parse_mail_methods(const char* script_json_path) {
     std::regex method_pattern("\"name\"\\s*:\\s*\"([^\"]+)\"");
     std::regex va_pattern("\"va\"\\s*:\\s*\"([^\"]+)\"");
     std::regex offset_pattern("\"offset\"\\s*:\\s*\"([^\"]+)\"");
-    std::regex class_pattern("\"name\"\\s*:\\s*\"([^\"]*(?:Mail|MailManager)[^\"]*)\"");
+    std::regex class_pattern("\"name\"\\s*:\\s*\"([^\"]*(?:Mail|MailManager|Network|XBaseNetwork|XNetwork)[^\"]*)\"");
     std::regex namespace_pattern("\"namespace\"\\s*:\\s*\"([^\"]+)\"");
     
     std::sregex_iterator iter(json_content.begin(), json_content.end(), method_pattern);
@@ -134,6 +181,25 @@ static bool parse_mail_methods(const char* script_json_path) {
             method_name.find("XTable") == 0 ||
             method_name.length() < 4) { // Too short
             continue;
+        }
+        
+        // Filter out constants (they usually don't have offset/VA and are all caps or have "Manager" in name)
+        // Constants like "MailManagerGetMailFail" are usually error codes, not methods
+        if (method_name.find("Manager") != std::string::npos && 
+            method_name.length() > 15) { // Long names with Manager are usually constants
+            // Check if it's all caps or has pattern like "XxxManagerXxxXxx"
+            bool looks_like_constant = false;
+            if (method_name.find("Manager") != std::string::npos) {
+                // Check if it follows constant naming pattern (starts with class name)
+                size_t manager_pos = method_name.find("Manager");
+                if (manager_pos > 0 && manager_pos < method_name.length() - 10) {
+                    // Pattern: ClassManagerMethodName - likely a constant
+                    looks_like_constant = true;
+                }
+            }
+            if (looks_like_constant) {
+                continue; // Skip constants
+            }
         }
         
         // Find the class name for this method (search backward)
@@ -170,9 +236,25 @@ static bool parse_mail_methods(const char* script_json_path) {
         // Priority 1: MailManager class methods (highest priority)
         bool is_mail_manager_method = false;
         if (found_class.find("MailManager") != std::string::npos) {
-            // MailManager class - hook all methods
+            // MailManager class - hook methods but exclude constants
+            // Constants: MailManagerGetMailFail, MailManagerMailExist (long, descriptive)
+            // Methods: GetMail, ReadMail, DeleteMail (shorter, action verbs)
             if (method_name[0] >= 'A' && method_name[0] <= 'Z') {
-                is_mail_manager_method = true;
+                // Exclude constants (long names starting with class name pattern)
+                if (method_name.find("MailManager") == 0 && method_name.length() > 18) {
+                    // This is likely a constant like "MailManagerGetMailFail"
+                    continue;
+                }
+                // Include actual methods (shorter, action-based names)
+                if (method_name.find("Get") == 0 || 
+                    method_name.find("Read") == 0 ||
+                    method_name.find("Delete") == 0 ||
+                    method_name.find("Send") == 0 ||
+                    method_name.find("Receive") == 0 ||
+                    method_name.find("On") == 0 ||
+                    method_name.length() < 18) { // Methods are usually shorter than 18 chars
+                    is_mail_manager_method = true;
+                }
             }
         }
         
@@ -195,9 +277,29 @@ static bool parse_mail_methods(const char* script_json_path) {
             }
         }
         
-        // Priority 3: Methods with mail-related names in any class
+        // Priority 3: Network communication methods (hook network layer for mail requests/responses)
+        bool is_network_method = false;
+        if (found_class.find("Network") != std::string::npos || 
+            found_class.find("XBaseNetwork") != std::string::npos ||
+            found_class.find("XNetwork") != std::string::npos) {
+            // Hook network communication methods
+            if (method_name == "Send" ||
+                method_name == "Call" ||
+                method_name == "ProcessMessage" ||
+                method_name == "DealMessage" ||
+                method_name == "OnMessage" ||
+                method_name == "OnReceive" ||
+                method_name.find("Send") == 0 ||
+                method_name.find("Call") == 0 ||
+                method_name.find("Process") == 0 ||
+                method_name.find("Handle") == 0) {
+                is_network_method = true;
+            }
+        }
+        
+        // Priority 4: Methods with mail-related names in any class
         bool is_mail_named_method = false;
-        if (!is_mail_manager_method && !is_mail_class_method) {
+        if (!is_mail_manager_method && !is_mail_class_method && !is_network_method) {
             if (method_name[0] >= 'A' && method_name[0] <= 'Z') {
                 // More specific patterns for game mail methods
                 if (method_name.find("GetMailReward") != std::string::npos ||
@@ -213,16 +315,15 @@ static bool parse_mail_methods(const char* script_json_path) {
             }
         }
         
-        bool is_mail_method = is_mail_manager_method || is_mail_class_method || is_mail_named_method;
+        bool is_mail_method = is_mail_manager_method || is_mail_class_method || is_network_method || is_mail_named_method;
         
         if (!is_mail_method) {
             continue;
         }
         
-        LOGI("Processing mail method candidate: %s::%s::%s", 
-             found_ns.c_str(), found_class.c_str(), method_name.c_str());
-        
         // Find offset and VA near this method name (look forward in the JSON)
+        // IMPORTANT: Only process methods that have offset/VA (actual executable methods)
+        // Constants don't have offset/VA, so this filters them out automatically
         size_t search_start = pos;
         size_t search_end = std::min(pos + 500, json_content.length());
         std::string context = json_content.substr(search_start, search_end - search_start);
@@ -231,9 +332,14 @@ static bool parse_mail_methods(const char* script_json_path) {
         bool has_offset = std::regex_search(context, offset_match, offset_pattern);
         bool has_va = std::regex_search(context, va_match, va_pattern);
         
+        // Skip if no offset/VA - this means it's a constant or non-executable symbol
         if (!has_offset && !has_va) {
-            continue; // Need at least one
+            continue; // Skip constants and non-executable symbols
         }
+        
+        // Now we know it's an actual method, log it
+        LOGI("Processing mail method candidate: %s::%s::%s", 
+             found_ns.c_str(), found_class.c_str(), method_name.c_str());
         
         uint64_t offset = 0;
         uint64_t va_dump = 0;
@@ -293,16 +399,30 @@ static bool parse_mail_methods(const char* script_json_path) {
         info->va = runtime_va;
         info->offset = offset;
         
-        // Assign hook function based on method name
-        if (method_name.find("GetReward") != std::string::npos) {
-            info->hook_func = (void*)mail_get_reward_hook;
-        } else if (method_name.find("Read") != std::string::npos) {
-            info->hook_func = (void*)mail_read_hook;
-        } else if (method_name.find("Delete") != std::string::npos) {
-            info->hook_func = (void*)mail_delete_hook;
-        } else {
-            info->hook_func = (void*)mail_get_reward_hook; // Default
-        }
+               // Assign hook function based on method name and class
+               if (found_class.find("Network") != std::string::npos) {
+                   // Network communication methods
+                   if (method_name == "Send" || method_name.find("Send") == 0) {
+                       info->hook_func = (void*)network_send_hook;
+                   } else if (method_name == "Call" || method_name.find("Call") == 0) {
+                       info->hook_func = (void*)network_call_hook;
+                   } else if (method_name == "ProcessMessage" || method_name.find("Process") == 0) {
+                       info->hook_func = (void*)network_process_message_hook;
+                   } else {
+                       info->hook_func = (void*)network_process_message_hook; // Default for network
+                   }
+               } else {
+                   // Mail-specific methods
+                   if (method_name.find("GetReward") != std::string::npos) {
+                       info->hook_func = (void*)mail_get_reward_hook;
+                   } else if (method_name.find("Read") != std::string::npos) {
+                       info->hook_func = (void*)mail_read_hook;
+                   } else if (method_name.find("Delete") != std::string::npos) {
+                       info->hook_func = (void*)mail_delete_hook;
+                   } else {
+                       info->hook_func = (void*)mail_get_reward_hook; // Default
+                   }
+               }
         
         info->hooked = false;
         mail_hook_count++;
