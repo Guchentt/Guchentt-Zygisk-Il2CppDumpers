@@ -155,120 +155,119 @@ static bool parse_mail_methods(const char* script_json_path) {
         }
         
         LOGI("Processing mail method candidate: %s", method_name.c_str());
-            
-            // Find offset and VA near this method name (look forward in the JSON)
-            size_t pos = iter->position();
-            size_t search_start = pos;
-            size_t search_end = std::min(pos + 500, json_content.length());
-            std::string context = json_content.substr(search_start, search_end - search_start);
-            
-            std::smatch offset_match, va_match;
-            bool has_offset = std::regex_search(context, offset_match, offset_pattern);
-            bool has_va = std::regex_search(context, va_match, va_pattern);
-            
-            if (!has_offset && !has_va) {
-                continue; // Need at least one
-            }
-            
-            uint64_t offset = 0;
-            uint64_t va_dump = 0;
-            
-            // Parse offset (RVA)
-            if (has_offset) {
-                std::string offset_str = offset_match[1].str();
-                char* endptr = nullptr;
-                offset = strtoull(offset_str.c_str(), &endptr, 16);
-                if (endptr == offset_str.c_str() || *endptr != '\0') {
-                    continue;
-                }
-            }
-            
-            // Parse VA (from dump)
-            if (has_va) {
-                std::string va_str = va_match[1].str();
-                char* endptr = nullptr;
-                va_dump = strtoull(va_str.c_str(), &endptr, 16);
-                if (endptr == va_str.c_str() || *endptr != '\0') {
-                    va_dump = 0;
-                }
-            }
-            
-            // Calculate runtime address
-            // Priority: use offset (RVA) if available, as it's more reliable
-            uint64_t runtime_va = 0;
-            if (offset > 0 && il2cpp_base > 0) {
-                runtime_va = il2cpp_base + offset;
-                LOGI("Calculated runtime VA from offset: 0x%" PRIx64 " = 0x%" PRIx64 " + 0x%" PRIx64,
-                     runtime_va, il2cpp_base, offset);
-            } else if (va_dump > 0 && il2cpp_base > 0) {
-                // If we only have VA, try to calculate offset from dump VA
-                // The dump VA is relative to dump base, we need to find dump base
-                // For now, skip methods without offset as they're unreliable
-                LOGW("Skipping %s: has VA but no offset, cannot calculate runtime address reliably",
-                     method_name.c_str());
-                continue;
-            } else {
-                LOGW("Skipping %s: missing offset/VA or il2cpp_base not initialized",
-                     method_name.c_str());
-                continue;
-            }
-            
-            // Verify address is in reasonable range (should be close to il2cpp_base)
-            if (runtime_va < il2cpp_base || runtime_va > il2cpp_base + 0x10000000) {
-                LOGW("Skipping %s: calculated VA 0x%" PRIx64 " seems invalid (base: 0x%" PRIx64 ")",
-                     method_name.c_str(), runtime_va, il2cpp_base);
-                continue;
-            }
-            
-            HookInfo* info = &mail_hooks[mail_hook_count];
-            info->method_name = strdup(method_name.c_str());
-            
-            // Try to find class and namespace (search backward from method)
-            size_t backward_start = pos > 2000 ? pos - 2000 : 0;
-            std::string backward_context = json_content.substr(backward_start, pos - backward_start);
-            
-            std::smatch class_match, ns_match;
-            // Search for the most recent class name before this method
-            std::sregex_iterator class_iter(backward_context.begin(), backward_context.end(), class_pattern);
-            std::sregex_iterator class_end;
-            std::string found_class = "Unknown";
-            for (; class_iter != class_end; ++class_iter) {
-                found_class = class_iter->str(1);
-            }
-            info->class_name = strdup(found_class.c_str());
-            
-            // Search for namespace (take the last match)
-            std::sregex_iterator ns_iter(backward_context.begin(), backward_context.end(), namespace_pattern);
-            std::sregex_iterator ns_end;
-            std::string found_ns = "";
-            for (; ns_iter != ns_end; ++ns_iter) {
-                found_ns = ns_iter->str(1);
-            }
-            info->namespace_name = strdup(found_ns.c_str());
-            
-            info->va = runtime_va;
-            info->offset = offset;
-            
-            // Assign hook function based on method name
-            if (method_name.find("GetReward") != std::string::npos) {
-                info->hook_func = (void*)mail_get_reward_hook;
-            } else if (method_name.find("Read") != std::string::npos) {
-                info->hook_func = (void*)mail_read_hook;
-            } else if (method_name.find("Delete") != std::string::npos) {
-                info->hook_func = (void*)mail_delete_hook;
-            } else {
-                info->hook_func = (void*)mail_get_reward_hook; // Default
-            }
-            
-            info->hooked = false;
-            mail_hook_count++;
-            found++;
-            
-            LOGI("Found mail method: %s::%s::%s at runtime 0x%" PRIx64 " (offset: 0x%" PRIx64 "%s)",
-                 info->namespace_name, info->class_name, 
-                 info->method_name, info->va, info->offset,
-                 va_dump > 0 ? ", dump VA available" : "");
+        
+        // Find offset and VA near this method name (look forward in the JSON)
+        size_t pos = iter->position();
+        size_t search_start = pos;
+        size_t search_end = std::min(pos + 500, json_content.length());
+        std::string context = json_content.substr(search_start, search_end - search_start);
+        
+        std::smatch offset_match, va_match;
+        bool has_offset = std::regex_search(context, offset_match, offset_pattern);
+        bool has_va = std::regex_search(context, va_match, va_pattern);
+        
+        if (!has_offset && !has_va) {
+            continue; // Need at least one
         }
+        
+        uint64_t offset = 0;
+        uint64_t va_dump = 0;
+        
+        // Parse offset (RVA)
+        if (has_offset) {
+            std::string offset_str = offset_match[1].str();
+            char* endptr = nullptr;
+            offset = strtoull(offset_str.c_str(), &endptr, 16);
+            if (endptr == offset_str.c_str() || *endptr != '\0') {
+                continue;
+            }
+        }
+        
+        // Parse VA (from dump)
+        if (has_va) {
+            std::string va_str = va_match[1].str();
+            char* endptr = nullptr;
+            va_dump = strtoull(va_str.c_str(), &endptr, 16);
+            if (endptr == va_str.c_str() || *endptr != '\0') {
+                va_dump = 0;
+            }
+        }
+        
+        // Calculate runtime address
+        // Priority: use offset (RVA) if available, as it's more reliable
+        uint64_t runtime_va = 0;
+        if (offset > 0 && il2cpp_base > 0) {
+            runtime_va = il2cpp_base + offset;
+            LOGI("Calculated runtime VA from offset: 0x%" PRIx64 " = 0x%" PRIx64 " + 0x%" PRIx64,
+                 runtime_va, il2cpp_base, offset);
+        } else if (va_dump > 0 && il2cpp_base > 0) {
+            // If we only have VA, try to calculate offset from dump VA
+            // The dump VA is relative to dump base, we need to find dump base
+            // For now, skip methods without offset as they're unreliable
+            LOGW("Skipping %s: has VA but no offset, cannot calculate runtime address reliably",
+                 method_name.c_str());
+            continue;
+        } else {
+            LOGW("Skipping %s: missing offset/VA or il2cpp_base not initialized",
+                 method_name.c_str());
+            continue;
+        }
+        
+        // Verify address is in reasonable range (should be close to il2cpp_base)
+        if (runtime_va < il2cpp_base || runtime_va > il2cpp_base + 0x10000000) {
+            LOGW("Skipping %s: calculated VA 0x%" PRIx64 " seems invalid (base: 0x%" PRIx64 ")",
+                 method_name.c_str(), runtime_va, il2cpp_base);
+            continue;
+        }
+        
+        HookInfo* info = &mail_hooks[mail_hook_count];
+        info->method_name = strdup(method_name.c_str());
+        
+        // Try to find class and namespace (search backward from method)
+        size_t backward_start = pos > 2000 ? pos - 2000 : 0;
+        std::string backward_context = json_content.substr(backward_start, pos - backward_start);
+        
+        std::smatch class_match, ns_match;
+        // Search for the most recent class name before this method
+        std::sregex_iterator class_iter(backward_context.begin(), backward_context.end(), class_pattern);
+        std::sregex_iterator class_end;
+        std::string found_class = "Unknown";
+        for (; class_iter != class_end; ++class_iter) {
+            found_class = class_iter->str(1);
+        }
+        info->class_name = strdup(found_class.c_str());
+        
+        // Search for namespace (take the last match)
+        std::sregex_iterator ns_iter(backward_context.begin(), backward_context.end(), namespace_pattern);
+        std::sregex_iterator ns_end;
+        std::string found_ns = "";
+        for (; ns_iter != ns_end; ++ns_iter) {
+            found_ns = ns_iter->str(1);
+        }
+        info->namespace_name = strdup(found_ns.c_str());
+        
+        info->va = runtime_va;
+        info->offset = offset;
+        
+        // Assign hook function based on method name
+        if (method_name.find("GetReward") != std::string::npos) {
+            info->hook_func = (void*)mail_get_reward_hook;
+        } else if (method_name.find("Read") != std::string::npos) {
+            info->hook_func = (void*)mail_read_hook;
+        } else if (method_name.find("Delete") != std::string::npos) {
+            info->hook_func = (void*)mail_delete_hook;
+        } else {
+            info->hook_func = (void*)mail_get_reward_hook; // Default
+        }
+        
+        info->hooked = false;
+        mail_hook_count++;
+        found++;
+        
+        LOGI("Found mail method: %s::%s::%s at runtime 0x%" PRIx64 " (offset: 0x%" PRIx64 "%s)",
+             info->namespace_name, info->class_name, 
+             info->method_name, info->va, info->offset,
+             va_dump > 0 ? ", dump VA available" : "");
     }
     
     LOGI("Parsed %d mail-related methods", mail_hook_count);
