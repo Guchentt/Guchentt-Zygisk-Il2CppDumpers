@@ -14,6 +14,8 @@
 #include <vector>
 #include <regex>
 #include <cstdarg>
+#include <cinttypes>
+#include <cstdlib>
 
 // Hook info storage
 static HookInfo mail_hooks[32];
@@ -140,9 +142,10 @@ static bool parse_mail_methods(const char* script_json_path) {
             if (std::regex_search(context, va_match, va_pattern)) {
                 std::string va_str = va_match[1].str();
                 uint64_t va = 0;
-                try {
-                    va = std::stoull(va_str, nullptr, 16);
-                } catch (...) {
+                // Parse hex string without exceptions (exceptions disabled)
+                char* endptr = nullptr;
+                va = strtoull(va_str.c_str(), &endptr, 16);
+                if (endptr == va_str.c_str() || *endptr != '\0') {
                     LOGW("Failed to parse VA: %s", va_str.c_str());
                     continue;
                 }
@@ -191,7 +194,7 @@ static bool parse_mail_methods(const char* script_json_path) {
                 mail_hook_count++;
                 found++;
                 
-                LOGI("Found mail method: %s::%s::%s at 0x%llx",
+                LOGI("Found mail method: %s::%s::%s at 0x%" PRIx64,
                      info->namespace_name, info->class_name, 
                      info->method_name, info->va);
             }
@@ -256,5 +259,4 @@ void on_mail_sent(void* mail_data) {
     LOGI("Mail Data: %p", mail_data);
     // TODO: Log mail sending
 }
-
 
