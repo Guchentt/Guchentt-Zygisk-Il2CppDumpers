@@ -6,7 +6,8 @@
 #include "hook.h"
 #include "log.h"
 #include "il2cpp_dump.h"
-#include "il2cpp-api-functions.h"
+#include "il2cpp-tabledefs.h"
+#include "il2cpp-class.h"
 #include "xdl.h"
 #include <cstring>
 #include <cstdio>
@@ -23,6 +24,12 @@
 static HookInfo mail_hooks[32];
 static int mail_hook_count = 0;
 extern uint64_t il2cpp_base; // From il2cpp_dump.cpp
+
+// Declare IL2CPP API function pointers as extern (they are defined in il2cpp_dump.cpp)
+// We need to declare the ones we use in this file
+#define DO_API(r, n, p) extern r (*n) p
+#include "il2cpp-api-functions.h"
+#undef DO_API
 
 // Hooked function stubs
 extern "C" {
