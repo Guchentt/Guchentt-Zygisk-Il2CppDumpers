@@ -1,0 +1,25 @@
+{
+  "mail_hooks": [
+    {
+      "class_name": "MailManager",
+      "namespace": "YourGame.Namespace",
+      "method_name": "GetMailReward",
+      "hook_type": "reward"
+    },
+    {
+      "class_name": "MailManager",
+      "namespace": "YourGame.Namespace",
+      "method_name": "ReadMail",
+      "hook_type": "read"
+    },
+    {
+      "class_name": "MailManager",
+      "namespace": "YourGame.Namespace",
+      "method_name": "DeleteMail",
+      "hook_type": "delete"
+    }
+  ],
+  "enable_logging": true,
+  "log_file": "/data/data/com.game.packagename/files/hook_log.txt"
+}
+
