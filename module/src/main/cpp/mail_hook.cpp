@@ -5,6 +5,8 @@
 #include "mail_hook.h"
 #include "hook.h"
 #include "log.h"
+#include "il2cpp_dump.h"
+#include "il2cpp-api-functions.h"
 #include "xdl.h"
 #include <cstring>
 #include <cstdio>
@@ -33,16 +35,32 @@ extern "C" {
         LOGI("=== Network Send Hook ===");
         LOGI("Self: %p", self);
         
-        // Check if this is a mail-related request
+        // Extract handler string using IL2CPP API
         if (handler) {
-            // handler is usually a string (RPC name)
-            // We need to check if it contains "Mail" or mail-related keywords
-            // Note: This is a simplified check - actual implementation may need to use IL2CPP API
-            LOGI("Handler: %p", handler);
+            // Check if handler is Il2CppString
+            Il2CppObject* handler_obj = (Il2CppObject*)handler;
+            Il2CppClass* handler_class = il2cpp_object_get_class(handler_obj);
+            
+            if (handler_class && il2cpp_class_is_assignable_from(
+                    il2cpp_class_from_name(il2cpp_get_corlib(), "System", "String"),
+                    handler_class)) {
+                Il2CppString* handler_str = (Il2CppString*)handler;
+                const char* handler_cstr = il2cpp_string_chars(handler_str);
+                int handler_len = il2cpp_string_length(handler_str);
+                LOGI("Handler: %.*s", handler_len, handler_cstr);
+                
+                // Check if this is a mail-related request
+                if (strstr(handler_cstr, "Mail") != nullptr || 
+                    strstr(handler_cstr, "mail") != nullptr) {
+                    LOGI(">>> Mail-related network request detected!");
+                }
+            } else {
+                LOGI("Handler: %p (not a string)", handler);
+            }
         }
         
         if (content) {
-            LOGI("Content: %p (size: ?)", content);
+            LOGI("Content: %p", content);
             // TODO: Parse content to check if it's mail-related
         }
         
@@ -77,7 +95,27 @@ extern "C" {
     
     void* mail_get_reward_hook(void* self, ...) {
         LOGI("=== Mail GetReward Hook ===");
-        LOGI("Self: %p", self);
+        
+        // Extract object information using IL2CPP API
+        if (self) {
+            Il2CppClass* klass = il2cpp_object_get_class(self);
+            if (klass) {
+                const char* class_name = il2cpp_class_get_name(klass);
+                const char* namespace_name = il2cpp_class_get_namespace(klass);
+                LOGI("Self: %p (Class: %s::%s)", self, namespace_name, class_name);
+                
+                // Extract fields
+                void* iter = nullptr;
+                int field_count = 0;
+                while (FieldInfo* field = il2cpp_class_get_fields(klass, &iter)) {
+                    const char* field_name = il2cpp_field_get_name(field);
+                    uint32_t offset = il2cpp_field_get_offset(field);
+                    LOGI("  Field[%d]: %s (offset: 0x%x)", field_count++, field_name, offset);
+                }
+            } else {
+                LOGI("Self: %p (unknown class)", self);
+            }
+        }
         
         // Extract arguments (this is simplified - actual implementation depends on method signature)
         va_list args;
@@ -352,6 +390,13 @@ static bool parse_mail_methods(const char* script_json_path) {
             if (endptr == offset_str.c_str() || *endptr != '\0') {
                 continue;
             }
+            // Validate offset is reasonable (should be positive and not too large)
+            // IL2CPP modules are typically < 100MB, so offset should be < 0x6400000
+            if (offset > 0x10000000) { // 256MB max
+                LOGW("Skipping %s::%s::%s: offset 0x%" PRIx64 " seems too large",
+                     found_ns.c_str(), found_class.c_str(), method_name.c_str(), offset);
+                continue;
+            }
         }
         
         // Parse VA (from dump)
@@ -443,29 +488,241 @@ bool mail_hook_init(void* il2cpp_handle, const char* script_json_path) {
         return false;
     }
     
-    // Parse script.json to find mail methods
-    if (!parse_mail_methods(script_json_path)) {
-        LOGW("No mail methods found in script.json, using default hooks");
-        // You can add default hooks here if needed
+    bool success = false;
+    
+    // Method 1: Try to hook using IL2CPP API directly (preferred method)
+    LOGI("Attempting to hook using IL2CPP API...");
+    if (hook_methods_using_il2cpp_api(il2cpp_handle)) {
+        LOGI("Successfully hooked methods using IL2CPP API");
+        success = true;
+    } else {
+        LOGW("Failed to hook using IL2CPP API, falling back to script.json");
     }
     
-    // Install all hooks
-    int installed = 0;
-    for (int i = 0; i < mail_hook_count; i++) {
-        if (hook_install(&mail_hooks[i])) {
-            installed++;
+    // Method 2: Parse script.json to find mail methods (fallback)
+    if (!success && script_json_path) {
+        LOGI("Parsing script.json: %s", script_json_path);
+        if (parse_mail_methods(script_json_path)) {
+            LOGI("Found %d mail methods in script.json", mail_hook_count);
+            
+            // Install all hooks from script.json
+            int installed = 0;
+            LOGI("Attempting to install %d mail hooks from script.json...", mail_hook_count);
+            for (int i = 0; i < mail_hook_count; i++) {
+                HookInfo* info = &mail_hooks[i];
+                LOGI("Installing hook %d/%d: %s::%s::%s at 0x%" PRIx64,
+                     i + 1, mail_hook_count,
+                     info->namespace_name ? info->namespace_name : "",
+                     info->class_name ? info->class_name : "",
+                     info->method_name ? info->method_name : "",
+                     info->va);
+                if (hook_install(info)) {
+                    installed++;
+                    LOGI("Successfully installed hook %d: %s::%s::%s",
+                         i + 1,
+                         info->namespace_name ? info->namespace_name : "",
+                         info->class_name ? info->class_name : "",
+                         info->method_name ? info->method_name : "");
+                } else {
+                    LOGW("Failed to install hook %d: %s::%s::%s",
+                         i + 1,
+                         info->namespace_name ? info->namespace_name : "",
+                         info->class_name ? info->class_name : "",
+                         info->method_name ? info->method_name : "");
+                }
+            }
+            
+            LOGI("Installed %d/%d mail hooks from script.json", installed, mail_hook_count);
+            success = (installed > 0);
+        } else {
+            LOGW("No mail methods found in script.json");
         }
     }
     
-    LOGI("Installed %d/%d mail hooks", installed, mail_hook_count);
-    return installed > 0;
+    if (!success) {
+        LOGW("Failed to initialize mail hooks using both methods");
+    }
+    
+    return success;
+}
+
+// Helper function to find class by name using IL2CPP API
+static Il2CppClass* find_class_by_name(const char* namespace_name, const char* class_name) {
+    Il2CppDomain* domain = il2cpp_domain_get();
+    if (!domain) {
+        LOGE("Failed to get IL2CPP domain");
+        return nullptr;
+    }
+    
+    size_t size = 0;
+    const Il2CppAssembly** assemblies = il2cpp_domain_get_assemblies(domain, &size);
+    
+    for (int i = 0; i < size; ++i) {
+        const Il2CppImage* image = il2cpp_assembly_get_image(assemblies[i]);
+        Il2CppClass* klass = il2cpp_class_from_name(image, namespace_name, class_name);
+        if (klass) {
+            LOGI("Found class using IL2CPP API: %s::%s", namespace_name, class_name);
+            return klass;
+        }
+    }
+    
+    LOGW("Class not found using IL2CPP API: %s::%s", namespace_name, class_name);
+    return nullptr;
+}
+
+// Helper function to find method using IL2CPP API
+static const MethodInfo* find_method_by_name(Il2CppClass* klass, const char* method_name, int param_count) {
+    if (!klass) {
+        return nullptr;
+    }
+    
+    const MethodInfo* method = il2cpp_class_get_method_from_name(klass, method_name, param_count);
+    if (method && method->methodPointer) {
+        LOGI("Found method using IL2CPP API: %s (params: %d) at 0x%" PRIxPTR,
+             method_name, param_count, (uintptr_t)method->methodPointer);
+        return method;
+    }
+    
+    LOGW("Method not found using IL2CPP API: %s (params: %d)", method_name, param_count);
+    return nullptr;
+}
+
+// Hook methods using IL2CPP API directly (alternative to script.json)
+static bool hook_methods_using_il2cpp_api(void* il2cpp_handle) {
+    LOGI("Attempting to hook methods using IL2CPP API...");
+    
+    // Wait for IL2CPP initialization
+    while (!il2cpp_is_vm_thread(nullptr)) {
+        LOGI("Waiting for IL2CPP initialization...");
+        sleep(1);
+    }
+    
+    Il2CppDomain* domain = il2cpp_domain_get();
+    if (!domain) {
+        LOGE("Failed to get IL2CPP domain");
+        return false;
+    }
+    
+    il2cpp_thread_attach(domain);
+    
+    // Try to find MailManager class
+    Il2CppClass* mail_manager = find_class_by_name("", "MailManager");
+    if (!mail_manager) {
+        // Try alternative namespaces
+        mail_manager = find_class_by_name("Game", "MailManager");
+        if (!mail_manager) {
+            mail_manager = find_class_by_name("XGame", "MailManager");
+        }
+    }
+    
+    if (mail_manager) {
+        // List all methods for debugging
+        LOGI("Listing methods in MailManager:");
+        void* iter = nullptr;
+        int count = 0;
+        while (const MethodInfo* method = il2cpp_class_get_methods(mail_manager, &iter)) {
+            const char* method_name = il2cpp_method_get_name(method);
+            int param_count = il2cpp_method_get_param_count(method);
+            if (method->methodPointer) {
+                LOGI("  [%d] %s (params: %d) at 0x%" PRIxPTR,
+                     count++, method_name, param_count, (uintptr_t)method->methodPointer);
+            }
+        }
+        
+        // Try to hook GetMailReward
+        const MethodInfo* get_reward_method = find_method_by_name(mail_manager, "GetMailReward", 1);
+        if (get_reward_method) {
+            HookInfo info = {};
+            info.class_name = "MailManager";
+            info.namespace_name = "";
+            info.method_name = "GetMailReward";
+            info.va = (uint64_t)get_reward_method->methodPointer;
+            info.offset = info.va - il2cpp_base;
+            info.hook_func = (void*)mail_get_reward_hook;
+            info.hooked = false;
+            
+            if (hook_install(&info)) {
+                LOGI("Successfully hooked GetMailReward using IL2CPP API");
+                return true;
+            }
+        }
+        
+        // Try to hook ReadMail
+        const MethodInfo* read_method = find_method_by_name(mail_manager, "ReadMail", 1);
+        if (read_method) {
+            HookInfo info = {};
+            info.class_name = "MailManager";
+            info.namespace_name = "";
+            info.method_name = "ReadMail";
+            info.va = (uint64_t)read_method->methodPointer;
+            info.offset = info.va - il2cpp_base;
+            info.hook_func = (void*)mail_read_hook;
+            info.hooked = false;
+            
+            if (hook_install(&info)) {
+                LOGI("Successfully hooked ReadMail using IL2CPP API");
+            }
+        }
+    }
+    
+    // Try to find Network class
+    Il2CppClass* network_class = find_class_by_name("", "Network");
+    if (!network_class) {
+        network_class = find_class_by_name("", "XBaseNetwork");
+        if (!network_class) {
+            network_class = find_class_by_name("", "XNetwork");
+        }
+    }
+    
+    if (network_class) {
+        const MethodInfo* send_method = find_method_by_name(network_class, "Send", 2);
+        if (send_method) {
+            HookInfo info = {};
+            info.class_name = il2cpp_class_get_name(network_class);
+            info.namespace_name = il2cpp_class_get_namespace(network_class);
+            info.method_name = "Send";
+            info.va = (uint64_t)send_method->methodPointer;
+            info.offset = info.va - il2cpp_base;
+            info.hook_func = (void*)network_send_hook;
+            info.hooked = false;
+            
+            if (hook_install(&info)) {
+                LOGI("Successfully hooked Network.Send using IL2CPP API");
+            }
+        }
+    }
+    
+    return false;
 }
 
 // Hook callbacks implementation
 void on_mail_received(void* mail_obj) {
     LOGI(">>> Mail Received Callback");
     LOGI("Mail Object: %p", mail_obj);
-    // TODO: Extract mail information using IL2CPP API
+    
+    // Extract mail information using IL2CPP API
+    if (mail_obj) {
+        Il2CppClass* klass = il2cpp_object_get_class(mail_obj);
+        if (klass) {
+            const char* class_name = il2cpp_class_get_name(klass);
+            const char* namespace_name = il2cpp_class_get_namespace(klass);
+            LOGI("Mail class: %s::%s", namespace_name, class_name);
+            
+            // Extract fields
+            void* iter = nullptr;
+            while (FieldInfo* field = il2cpp_class_get_fields(klass, &iter)) {
+                const char* field_name = il2cpp_field_get_name(field);
+                uint32_t offset = il2cpp_field_get_offset(field);
+                const Il2CppType* field_type = il2cpp_field_get_type(field);
+                Il2CppClass* field_class = il2cpp_class_from_type(field_type);
+                
+                LOGI("  Field: %s (%s, offset: 0x%x)",
+                     field_name,
+                     il2cpp_class_get_name(field_class),
+                     offset);
+            }
+        }
+    }
 }
 
 void on_mail_read(void* mail_id) {
