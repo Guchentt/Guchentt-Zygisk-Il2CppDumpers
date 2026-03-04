@@ -6,7 +6,6 @@
 #include "hook.h"
 #include "log.h"
 #include "xdl.h"
-#include "il2cpp-api-functions.h"
 #include <cstring>
 #include <cstdio>
 #include <fstream>
@@ -257,4 +256,5 @@ void on_mail_sent(void* mail_data) {
     LOGI("Mail Data: %p", mail_data);
     // TODO: Log mail sending
 }
+
 
