@@ -136,25 +136,91 @@ static bool parse_mail_methods(const char* script_json_path) {
             continue;
         }
         
-        // Only hook actual methods that start with capital letter
-        // and contain mail-related keywords
-        bool is_mail_method = false;
-        if (method_name[0] >= 'A' && method_name[0] <= 'Z') { // Starts with capital
-            if (method_name.find("Mail") != std::string::npos ||
-                method_name.find("GetReward") != std::string::npos ||
-                method_name.find("ReadMail") != std::string::npos ||
-                method_name.find("DeleteMail") != std::string::npos ||
-                method_name.find("ReceiveMail") != std::string::npos ||
-                method_name.find("SendMail") != std::string::npos) {
-                is_mail_method = true;
+        // Find the class name for this method (search backward)
+        size_t pos = iter->position();
+        size_t backward_start = pos > 2000 ? pos - 2000 : 0;
+        std::string backward_context = json_content.substr(backward_start, pos - backward_start);
+        
+        std::smatch class_match, ns_match;
+        std::sregex_iterator class_iter(backward_context.begin(), backward_context.end(), class_pattern);
+        std::sregex_iterator class_end;
+        std::string found_class = "Unknown";
+        for (; class_iter != class_end; ++class_iter) {
+            found_class = class_iter->str(1);
+        }
+        
+        std::sregex_iterator ns_iter(backward_context.begin(), backward_context.end(), namespace_pattern);
+        std::sregex_iterator ns_end;
+        std::string found_ns = "";
+        for (; ns_iter != ns_end; ++ns_iter) {
+            found_ns = ns_iter->str(1);
+        }
+        
+        // Exclude .NET framework classes (System.Net.Mail, System.Net.Sockets, etc.)
+        if (found_ns.find("System.Net") != std::string::npos ||
+            found_ns.find("System.") == 0) {
+            continue; // Skip .NET framework methods
+        }
+        
+        // Exclude Unity/UnityEngine classes
+        if (found_ns.find("Unity") != std::string::npos) {
+            continue;
+        }
+        
+        // Priority 1: MailManager class methods (highest priority)
+        bool is_mail_manager_method = false;
+        if (found_class.find("MailManager") != std::string::npos) {
+            // MailManager class - hook all methods
+            if (method_name[0] >= 'A' && method_name[0] <= 'Z') {
+                is_mail_manager_method = true;
             }
         }
+        
+        // Priority 2: Mail-related classes (XMail, MailData, etc.)
+        bool is_mail_class_method = false;
+        if (!is_mail_manager_method && 
+            (found_class.find("Mail") != std::string::npos && 
+             found_class != "MailAddress" && // Exclude .NET MailAddress
+             found_class.find("MailManager") == std::string::npos)) {
+            // Mail-related class - hook methods with mail-related names
+            if (method_name[0] >= 'A' && method_name[0] <= 'Z') {
+                if (method_name.find("Mail") != std::string::npos ||
+                    method_name.find("GetReward") != std::string::npos ||
+                    method_name.find("Read") != std::string::npos ||
+                    method_name.find("Delete") != std::string::npos ||
+                    method_name.find("Receive") != std::string::npos ||
+                    method_name.find("Send") != std::string::npos) {
+                    is_mail_class_method = true;
+                }
+            }
+        }
+        
+        // Priority 3: Methods with mail-related names in any class
+        bool is_mail_named_method = false;
+        if (!is_mail_manager_method && !is_mail_class_method) {
+            if (method_name[0] >= 'A' && method_name[0] <= 'Z') {
+                // More specific patterns for game mail methods
+                if (method_name.find("GetMailReward") != std::string::npos ||
+                    method_name.find("ReadMail") != std::string::npos ||
+                    method_name.find("DeleteMail") != std::string::npos ||
+                    method_name.find("ReceiveMail") != std::string::npos ||
+                    method_name.find("SendMail") != std::string::npos ||
+                    method_name.find("OnMail") != std::string::npos ||
+                    (method_name.find("Mail") != std::string::npos && 
+                     method_name.length() > 8)) { // Longer names are more likely to be actual methods
+                    is_mail_named_method = true;
+                }
+            }
+        }
+        
+        bool is_mail_method = is_mail_manager_method || is_mail_class_method || is_mail_named_method;
         
         if (!is_mail_method) {
             continue;
         }
         
-        LOGI("Processing mail method candidate: %s", method_name.c_str());
+        LOGI("Processing mail method candidate: %s::%s::%s", 
+             found_ns.c_str(), found_class.c_str(), method_name.c_str());
         
         // Find offset and VA near this method name (look forward in the JSON)
         size_t pos = iter->position();
@@ -204,46 +270,25 @@ static bool parse_mail_methods(const char* script_json_path) {
             // If we only have VA, try to calculate offset from dump VA
             // The dump VA is relative to dump base, we need to find dump base
             // For now, skip methods without offset as they're unreliable
-            LOGW("Skipping %s: has VA but no offset, cannot calculate runtime address reliably",
-                 method_name.c_str());
+            LOGW("Skipping %s::%s::%s: has VA but no offset, cannot calculate runtime address reliably",
+                 found_ns.c_str(), found_class.c_str(), method_name.c_str());
             continue;
         } else {
-            LOGW("Skipping %s: missing offset/VA or il2cpp_base not initialized",
-                 method_name.c_str());
+            LOGW("Skipping %s::%s::%s: missing offset/VA or il2cpp_base not initialized",
+                 found_ns.c_str(), found_class.c_str(), method_name.c_str());
             continue;
         }
         
         // Verify address is in reasonable range (should be close to il2cpp_base)
         if (runtime_va < il2cpp_base || runtime_va > il2cpp_base + 0x10000000) {
-            LOGW("Skipping %s: calculated VA 0x%" PRIx64 " seems invalid (base: 0x%" PRIx64 ")",
-                 method_name.c_str(), runtime_va, il2cpp_base);
+            LOGW("Skipping %s::%s::%s: calculated VA 0x%" PRIx64 " seems invalid (base: 0x%" PRIx64 ")",
+                 found_ns.c_str(), found_class.c_str(), method_name.c_str(), runtime_va, il2cpp_base);
             continue;
         }
         
         HookInfo* info = &mail_hooks[mail_hook_count];
         info->method_name = strdup(method_name.c_str());
-        
-        // Try to find class and namespace (search backward from method)
-        size_t backward_start = pos > 2000 ? pos - 2000 : 0;
-        std::string backward_context = json_content.substr(backward_start, pos - backward_start);
-        
-        std::smatch class_match, ns_match;
-        // Search for the most recent class name before this method
-        std::sregex_iterator class_iter(backward_context.begin(), backward_context.end(), class_pattern);
-        std::sregex_iterator class_end;
-        std::string found_class = "Unknown";
-        for (; class_iter != class_end; ++class_iter) {
-            found_class = class_iter->str(1);
-        }
         info->class_name = strdup(found_class.c_str());
-        
-        // Search for namespace (take the last match)
-        std::sregex_iterator ns_iter(backward_context.begin(), backward_context.end(), namespace_pattern);
-        std::sregex_iterator ns_end;
-        std::string found_ns = "";
-        for (; ns_iter != ns_end; ++ns_iter) {
-            found_ns = ns_iter->str(1);
-        }
         info->namespace_name = strdup(found_ns.c_str());
         
         info->va = runtime_va;
