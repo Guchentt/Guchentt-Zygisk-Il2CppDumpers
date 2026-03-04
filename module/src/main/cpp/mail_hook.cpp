@@ -223,7 +223,6 @@ static bool parse_mail_methods(const char* script_json_path) {
              found_ns.c_str(), found_class.c_str(), method_name.c_str());
         
         // Find offset and VA near this method name (look forward in the JSON)
-        size_t pos = iter->position();
         size_t search_start = pos;
         size_t search_end = std::min(pos + 500, json_content.length());
         std::string context = json_content.substr(search_start, search_end - search_start);
